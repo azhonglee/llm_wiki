@@ -417,6 +417,111 @@ npm run tauri dev      # 开发模式
 npm run tauri build    # 生产构建
 ```
 
+### Web 部署（Web Edition）
+
+Web 服务由无窗口 `llm-wiki-server` 提供静态页面、`/api/v2`、SSE 和受保护资源。**当前服务没有原生 TLS 监听器**，因此唯一受支持的远程部署方式是：服务仅监听 loopback，由 Caddy/Nginx 在同一域名上终止 HTTPS。不能把 Vite、桌面版 `llm-wiki` 或 `llm-wiki-server --allow-insecure-remote` 暴露到 LAN 或公网。
+
+当前 Web UI 支持项目创建、注册、重命名与解除注册，项目文件浏览、Markdown 新建/编辑/移动/删除，资料上传与常见媒体预览，关键词搜索、WikiLink 图谱、Review、OpenAI-compatible Chat、索引任务和脱敏设置。多格式自动 ingest、LanceDB 混合检索、Deep Research 和本地 CLI 仍由桌面版提供，后续按 `plans/web-edition.md` 继续迁移。
+
+随仓库提供的部署文件：
+
+- `.env.web.example`：手工启动或 systemd 的非敏感参数模板；真实配置包含 token，必须为 `0600`。
+- `scripts/check-web-env.sh`：校验二进制、静态资源、目录、端口、token 与 loopback 绑定，不启动服务。
+- `scripts/start-web.sh`：仅以已校验参数启动服务，强制 `Secure` Cookie，且不会把 token 放入命令行。
+- `deploy/systemd/llm-wiki-web.service`：最小权限 systemd 模板。
+- `deploy/caddy/Caddyfile.example`：HTTPS、SSE、25 MB 上传限制和私有响应缓存策略示例。
+- `deploy/caddy/Caddyfile.ip.example`：仅有固定 IP 时使用 Caddy 内部 CA 的 HTTPS 示例。
+
+#### 推荐：systemd + Caddy
+
+以下路径与模板一致，可按实际安装目录调整。构建并安装无窗口服务和同源静态资源：
+
+```bash
+npm run web:build
+# 等价于先构建浏览器前端，再构建 src-tauri/server 中的无窗口服务。
+
+sudo useradd --system --home /nonexistent --shell /usr/sbin/nologin llm-wiki
+sudo install -d -o llm-wiki -g llm-wiki -m 0750 \
+  /srv/llm-wiki/projects /var/lib/llm-wiki
+sudo install -d -o root -g root -m 0755 /opt/llm-wiki/bin /opt/llm-wiki/scripts /opt/llm-wiki/dist
+sudo install -m 0755 src-tauri/server/target/release/llm-wiki-server /opt/llm-wiki/bin/
+sudo install -m 0755 scripts/check-web-env.sh scripts/start-web.sh /opt/llm-wiki/scripts/
+sudo install -m 0644 scripts/lib-web-env.sh /opt/llm-wiki/scripts/
+sudo cp -a dist/. /opt/llm-wiki/dist/
+
+sudo install -d -o llm-wiki -g llm-wiki -m 0750 /etc/llm-wiki
+sudo install -o llm-wiki -g llm-wiki -m 0600 .env.web.example /etc/llm-wiki/web.env
+sudoedit /etc/llm-wiki/web.env
+```
+
+在 `/etc/llm-wiki/web.env` 中保留 `LLM_WIKI_WEB_HOST=127.0.0.1`，设置实际目录，并生成至少 32 个字符的随机 `LLM_WIKI_WEB_BOOTSTRAP_TOKEN`（例如 `openssl rand -hex 32`）。当前实现将该值用于首次登录和 Bearer API 认证；它是密钥，不能提交、打印到日志或放入命令行。启动脚本将它仅作为子进程环境变量传递。
+
+如需使用 Web Chat，还需在同一文件中配置 OpenAI-compatible 服务：
+
+```bash
+LLM_WIKI_LLM_ENDPOINT=https://api.openai.com/v1/chat/completions
+LLM_WIKI_LLM_MODEL=gpt-4.1-mini
+LLM_WIKI_LLM_API_KEY=replace-with-real-key
+```
+
+也可以在 Web 设置页填写 `webChat.endpoint`、`webChat.model` 和
+`webChat.apiKey`；环境变量优先于页面配置。API key 只保存在服务端，
+设置读取接口只返回“已配置”状态。
+
+先以服务账户验证环境，再安装并启动 unit：
+
+```bash
+sudo -u llm-wiki env LLM_WIKI_WEB_CONFIG=/etc/llm-wiki/web.env \
+  /opt/llm-wiki/scripts/check-web-env.sh
+sudo install -m 0644 deploy/systemd/llm-wiki-web.service /etc/systemd/system/llm-wiki-web.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now llm-wiki-web.service
+sudo systemctl status llm-wiki-web.service
+```
+
+将 `deploy/caddy/Caddyfile.example` 中的 `wiki.example.com` 替换为实际域名，安装到 Caddy 配置目录后校验并 reload。Caddy 对可公开解析的域名会自动申请并续期证书；内部域名必须配置受信内部 CA 或已有证书，不能降级为 HTTP。示例已关闭 API、会话和私有资源的共享缓存，并对 SSE 关闭缓冲。
+
+如果只能使用固定 IP，可直接基于 `deploy/caddy/Caddyfile.ip.example`
+配置 `https://192.168.1.20:8443` 和 `tls internal`，然后在访问设备上
+信任 Caddy 内部 CA。此时仍通过 HTTPS 的 `IP:port` 访问，Rust 服务继续
+只监听 loopback。
+
+```bash
+sudo cp deploy/caddy/Caddyfile.example /etc/caddy/Caddyfile
+sudo caddy validate --config /etc/caddy/Caddyfile
+sudo systemctl reload caddy
+```
+
+服务端必须继续绑定 `127.0.0.1:19828`。当前二进制的 `--allow-insecure-remote` 是明文 HTTP 逃生开关，部署脚本不会传递它；任何非 loopback 的需求都必须先通过 Caddy/Nginx HTTPS，而不是直接监听。
+
+#### 数据、权限与并发
+
+- `LLM_WIKI_WEB_WORKSPACE_ROOT` 保存全部项目内容；`LLM_WIKI_WEB_DATA_DIR` 保存项目注册表、任务/控制面状态以及后续迁移的 `server.db` 等文件。备份整个数据目录，不能只选择单个文件。
+- 工作区和数据目录都应归 `llm-wiki:llm-wiki` 所有，目录权限建议 `0750`。配置文件、token 及可选 `secrets.json` 必须为 `0600`，且不能被组或其他用户写入。
+- systemd 模板以 `ProtectSystem=strict` 运行，仅对 `/srv/llm-wiki/projects` 和 `/var/lib/llm-wiki` 开放写权限。若改动路径，必须同步修改 `ReadWritePaths`，不要为了排错关闭 sandbox。
+- 迁移期不得让旧桌面版本和 Web 服务同时写同一个项目。data-dir 锁不能替代每个项目的写锁。
+- Web 首发默认应禁用 Agent shell、Claude CLI 和 Codex CLI；只有在二进制路径、审批、审计和 systemd sandbox 都已按实现配置后才可显式开启。
+
+#### 备份、恢复与升级
+
+备份必须包含：工作区的全部项目、完整数据目录、`/etc/llm-wiki/web.env` 或其等价的受保护 credential 来源，以及服务二进制的版本/校验信息。把包含 token 的备份放在加密且访问受控的位置。
+
+一致性优先的基础备份流程是先停止服务，再复制两个数据根目录；示例不使用 `/tmp`：
+
+```bash
+umask 077
+backup_root="$HOME/llm-wiki-backups/$(date +%F-%H%M%S)"
+mkdir -p "$backup_root"
+sudo systemctl stop llm-wiki-web.service
+sudo rsync -aHAX --numeric-ids /srv/llm-wiki/projects/ "$backup_root/projects/"
+sudo rsync -aHAX --numeric-ids /var/lib/llm-wiki/ "$backup_root/state/"
+sudo install -m 0600 /etc/llm-wiki/web.env "$backup_root/web.env"
+sha256sum /opt/llm-wiki/bin/llm-wiki-server > "$backup_root/server.sha256"
+sudo systemctl start llm-wiki-web.service
+```
+
+恢复时依次执行：停止服务、恢复工作区和完整数据目录（保留所有者及权限）、按所恢复版本执行只读 migration check、启动服务，然后访问 `/api/v2/health/ready` 并检查项目列表和索引一致性。LanceDB 如被声明为可重建索引，可在确认原始项目文件完整后重建；不得在未确认前自动删除现有索引或项目数据。升级前先完成可恢复备份，并在副本上演练升级和回滚。
+
 ### Chrome 扩展
 
 1. 打开 `chrome://extensions`

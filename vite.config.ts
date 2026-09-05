@@ -5,6 +5,8 @@ import react from "@vitejs/plugin-react"
 import tailwindcss from "@tailwindcss/vite"
 
 const host = process.env.TAURI_DEV_HOST
+const webDevHost = process.env.LLM_WIKI_WEB_DEV_HOST
+const webApiTarget = process.env.LLM_WIKI_WEB_DEV_API ?? "http://127.0.0.1:19828"
 
 // Read version from package.json at config-load time so the Settings
 // UI can show the running app version without duplicating the string.
@@ -22,15 +24,13 @@ export default defineConfig(async () => ({
     __APP_VERSION__: JSON.stringify(pkgJson.version),
   },
 
-  // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
-  //
-  // 1. prevent vite from obscuring rust errors
+  // Keep the Tauri dev-server contract only when `tauri dev` supplies its
+  // host. A regular browser dev server must be reachable independently.
   clearScreen: false,
-  // 2. tauri expects a fixed port, fail if that port is not available
   server: {
     port: 1420,
     strictPort: true,
-    host: host || false,
+    host: host || webDevHost || "127.0.0.1",
     hmr: host
       ? {
           protocol: "ws",
@@ -38,10 +38,13 @@ export default defineConfig(async () => ({
           port: 1421,
         }
       : undefined,
-    watch: {
-      // 3. tell vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+    proxy: {
+      "/api": {
+        target: webApiTarget,
+        changeOrigin: false,
+      },
     },
+    watch: { ignored: ["**/src-tauri/**"] },
   },
 
   test: {

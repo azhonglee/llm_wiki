@@ -12,6 +12,7 @@ dist-rc/
 
 # Rust build artifacts
 src-tauri/target/
+src-tauri/server/target/
 
 # Tauri generated files
 src-tauri/gen/

@@ -1,0 +1,29 @@
+# Replace wiki.example.com with the deployment hostname. Caddy obtains and
+# renews HTTPS certificates automatically when the name is publicly reachable.
+# For an internal-only name, configure Caddy's internal CA or provide a trusted
+# certificate; do not expose this service over plaintext HTTP.
+wiki.example.com {
+    encode zstd gzip
+
+    # Keep this limit aligned with the server-side upload limit.
+    request_body {
+        max_size 25MB
+    }
+
+    header {
+        -Server
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "same-origin"
+    }
+
+    # API, sessions, and protected assets must not be cached by shared proxies.
+    @private path /api/* /assets/*
+    header @private Cache-Control "no-store"
+
+    reverse_proxy 127.0.0.1:19828 {
+        # Required for promptly flushing SSE events.
+        flush_interval -1
+        # Ingest and chat streams can be long lived.
+        stream_timeout 24h
+    }
+}

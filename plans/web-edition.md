@@ -1,9 +1,11 @@
 # LLM Wiki Web 端完整实现方案
 
-**状态：** 设计完成，待实施
+**状态：** Web Preview 已实现；高级导入、向量检索、Research 与 CLI 能力按后续阶段继续收口
 **目标版本：** Web Edition v1
 **设计日期：** 2026-09-05
 **适用场景：** 在 Linux 开发机或服务器上运行 LLM Wiki，通过 `IP:port` 使用浏览器访问；项目文件位于服务器本地磁盘。
+
+当前实现已经覆盖无窗口服务、登录与 CSRF、项目管理、文件 CRUD、上传与受保护资源预览、关键词搜索、WikiLink 图谱、Review、OpenAI-compatible Chat SSE、持久化 Job 状态、设置脱敏以及 systemd/Caddy 部署。完整桌面功能等价仍以后续阶段中的文档解析/自动 ingest、混合向量检索、Deep Research 和受控 CLI 为边界。
 
 ## 1. 结论与架构决策
 

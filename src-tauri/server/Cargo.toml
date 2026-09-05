@@ -1,0 +1,24 @@
+[package]
+name = "llm-wiki-server"
+version = "0.6.11"
+edition = "2021"
+rust-version = "1.88"
+description = "Headless Web Edition server for LLM Wiki"
+
+[dependencies]
+axum = { version = "0.8", features = ["multipart"] }
+futures = "0.3"
+mime = "0.3"
+mime_guess = "2"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+tokio-util = { version = "0.7", features = ["io"] }
+uuid = { version = "1", features = ["v4"] }
+walkdir = "2"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

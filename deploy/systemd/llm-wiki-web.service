@@ -1,0 +1,33 @@
+[Unit]
+Description=LLM Wiki Web Server
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=exec
+User=llm-wiki
+Group=llm-wiki
+WorkingDirectory=/opt/llm-wiki
+Environment=LLM_WIKI_WEB_CONFIG=/etc/llm-wiki/web.env
+ExecStart=/opt/llm-wiki/scripts/start-web.sh
+Restart=on-failure
+RestartSec=3s
+TimeoutStartSec=60s
+TimeoutStopSec=60s
+UMask=0077
+
+# The service must write only project content and its control-plane state.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectClock=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/srv/llm-wiki/projects /var/lib/llm-wiki
+
+[Install]
+WantedBy=multi-user.target

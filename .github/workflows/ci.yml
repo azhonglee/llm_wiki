@@ -52,6 +52,14 @@ jobs:
       - name: Check frontend build
         run: npx vite build
 
+      - name: Test headless Web server
+        if: matrix.platform == 'ubuntu-22.04'
+        run: cargo test --locked --manifest-path src-tauri/server/Cargo.toml
+
+      - name: Smoke-test Web API integration
+        if: matrix.platform == 'ubuntu-22.04'
+        run: npm run web:test:e2e
+
       - name: Prepare MCP server resources
         run: |
           npm --prefix mcp-server ci

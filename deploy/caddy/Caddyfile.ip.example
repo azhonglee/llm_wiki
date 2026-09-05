@@ -1,0 +1,26 @@
+# Replace 192.168.1.20 with the Linux host address clients will use.
+# `tls internal` creates a private CA certificate; install Caddy's root CA on
+# every client before opening this URL. Do not remove TLS and expose the Rust
+# listener directly on the LAN.
+https://192.168.1.20:8443 {
+    tls internal
+    encode zstd gzip
+
+    request_body {
+        max_size 25MB
+    }
+
+    header {
+        -Server
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "same-origin"
+    }
+
+    @private path /api/*
+    header @private Cache-Control "no-store"
+
+    reverse_proxy 127.0.0.1:19828 {
+        flush_interval -1
+        stream_timeout 24h
+    }
+}
