@@ -482,7 +482,7 @@ sudo systemctl status llm-wiki-web.service
 将 `deploy/caddy/Caddyfile.example` 中的 `wiki.example.com` 替换为实际域名，安装到 Caddy 配置目录后校验并 reload。Caddy 对可公开解析的域名会自动申请并续期证书；内部域名必须配置受信内部 CA 或已有证书，不能降级为 HTTP。示例已关闭 API、会话和私有资源的共享缓存，并对 SSE 关闭缓冲。
 
 如果只能使用固定 IP，可直接基于 `deploy/caddy/Caddyfile.ip.example`
-配置 `https://192.168.1.20:8443` 和 `tls internal`，然后在访问设备上
+配置 `https://10.37.12.240:8443` 和 `tls internal`，然后在访问设备上
 信任 Caddy 内部 CA。此时仍通过 HTTPS 的 `IP:port` 访问，Rust 服务继续
 只监听 loopback。
 

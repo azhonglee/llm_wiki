@@ -11,6 +11,30 @@ web_repo_root() {
   cd -- "$(web_script_dir)/.." && pwd
 }
 
+web_is_ipv4() {
+  local value="$1" octet
+  [[ "$value" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+  IFS=. read -r -a octets <<< "$value"
+  for octet in "${octets[@]}"; do
+    (( 10#$octet <= 255 )) || return 1
+  done
+}
+
+web_detect_lan_ipv4() {
+  local address
+  address="$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n 1)"
+  if web_is_ipv4 "$address" && [[ "$address" != 127.* ]]; then
+    printf '%s\n' "$address"
+    return 0
+  fi
+  hostname -I 2>/dev/null | tr ' ' '\n' | while IFS= read -r address; do
+    if web_is_ipv4 "$address" && [[ "$address" != 127.* && "$address" != 172.17.* ]]; then
+      printf '%s\n' "$address"
+      break
+    fi
+  done
+}
+
 web_validate_config_file() {
   local config_file="$1" mode owner
 
@@ -58,6 +82,11 @@ web_load_config() {
   fi
 
   WEB_CONFIG_FILE="$config_file"
+  if [[ -z "${LLM_WIKI_WEB_PUBLIC_IPV4:-}" ]]; then
+    LLM_WIKI_WEB_PUBLIC_IPV4="$(web_detect_lan_ipv4 || true)"
+  fi
+  LLM_WIKI_WEB_PUBLIC_HTTPS_PORT="${LLM_WIKI_WEB_PUBLIC_HTTPS_PORT:-8443}"
+  export LLM_WIKI_WEB_PUBLIC_IPV4 LLM_WIKI_WEB_PUBLIC_HTTPS_PORT
   export WEB_CONFIG_FILE
 }
 
@@ -69,7 +98,7 @@ web_is_loopback_host() {
 }
 
 web_validate_environment() {
-  local host port workspace data_dir web_root bin token path error_count=0
+  local host port workspace data_dir web_root bin token public_ipv4 public_port path error_count=0
 
   bin="${LLM_WIKI_WEB_SERVER_BIN:-}"
   host="${LLM_WIKI_WEB_HOST:-}"
@@ -78,6 +107,8 @@ web_validate_environment() {
   data_dir="${LLM_WIKI_WEB_DATA_DIR:-}"
   web_root="${LLM_WIKI_WEB_ROOT:-}"
   token="${LLM_WIKI_WEB_BOOTSTRAP_TOKEN:-}"
+  public_ipv4="${LLM_WIKI_WEB_PUBLIC_IPV4:-}"
+  public_port="${LLM_WIKI_WEB_PUBLIC_HTTPS_PORT:-8443}"
 
   for path in LLM_WIKI_WEB_SERVER_BIN LLM_WIKI_WEB_HOST LLM_WIKI_WEB_PORT \
     LLM_WIKI_WEB_WORKSPACE_ROOT LLM_WIKI_WEB_DATA_DIR LLM_WIKI_WEB_ROOT \
@@ -95,6 +126,15 @@ web_validate_environment() {
 
   if [[ -n "$port" ]] && { [[ ! "$port" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); }; then
     printf '错误: LLM_WIKI_WEB_PORT 必须是 1 到 65535 的整数: %s\n' "$port" >&2
+    error_count=$((error_count + 1))
+  fi
+
+  if [[ -n "$public_ipv4" ]] && ! web_is_ipv4 "$public_ipv4"; then
+    printf '错误: LLM_WIKI_WEB_PUBLIC_IPV4 不是有效 IPv4: %s\n' "$public_ipv4" >&2
+    error_count=$((error_count + 1))
+  fi
+  if [[ ! "$public_port" =~ ^[0-9]+$ ]] || (( public_port < 1 || public_port > 65535 )); then
+    printf '错误: LLM_WIKI_WEB_PUBLIC_HTTPS_PORT 必须是 1 到 65535 的整数: %s\n' "$public_port" >&2
     error_count=$((error_count + 1))
   fi
 

@@ -28,4 +28,8 @@ args=(
 # process listings. The server accepts this environment variable directly.
 umask 077
 export LLM_WIKI_BOOTSTRAP_TOKEN="$LLM_WIKI_WEB_BOOTSTRAP_TOKEN"
+if [[ -n "${LLM_WIKI_WEB_PUBLIC_IPV4:-}" ]]; then
+  printf 'LLM Wiki 局域网 HTTPS 地址：https://%s:%s\n' \
+    "$LLM_WIKI_WEB_PUBLIC_IPV4" "$LLM_WIKI_WEB_PUBLIC_HTTPS_PORT" >&2
+fi
 exec "$LLM_WIKI_WEB_SERVER_BIN" "${args[@]}"

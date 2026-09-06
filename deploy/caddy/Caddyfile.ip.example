@@ -1,8 +1,8 @@
-# Replace 192.168.1.20 with the Linux host address clients will use.
+# Replace 10.37.12.240 with the Linux host address clients will use.
 # `tls internal` creates a private CA certificate; install Caddy's root CA on
 # every client before opening this URL. Do not remove TLS and expose the Rust
 # listener directly on the LAN.
-https://192.168.1.20:8443 {
+https://10.37.12.240:8443 {
     tls internal
     encode zstd gzip
 

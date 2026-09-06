@@ -19,4 +19,9 @@ if [[ "${1:-}" != "--quiet" ]]; then
   printf 'Web 部署环境检查通过：host=%s port=%s workspace=%s data=%s\n' \
     "$LLM_WIKI_WEB_HOST" "$LLM_WIKI_WEB_PORT" \
     "$LLM_WIKI_WEB_WORKSPACE_ROOT" "$LLM_WIKI_WEB_DATA_DIR"
+  if [[ -n "${LLM_WIKI_WEB_PUBLIC_IPV4:-}" ]]; then
+    printf '局域网 IPv4：%s\n访问地址：https://%s:%s\n' \
+      "$LLM_WIKI_WEB_PUBLIC_IPV4" "$LLM_WIKI_WEB_PUBLIC_IPV4" \
+      "$LLM_WIKI_WEB_PUBLIC_HTTPS_PORT"
+  fi
 fi
