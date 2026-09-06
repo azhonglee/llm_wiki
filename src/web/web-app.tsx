@@ -1,24 +1,28 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  Activity,
+  ArrowLeft,
+  ArrowLeftRight,
   Bot,
-  ChevronDown,
-  ChevronRight,
+  ClipboardCheck,
+  ClipboardList,
   Download,
-  File,
   FileText,
-  Folder,
+  FolderOpen,
   FolderPlus,
-  GitFork,
+  Globe,
   LoaderCircle,
   LogOut,
   MessageSquare,
   Network,
+  PanelLeftClose,
   Plus,
   RefreshCw,
   Save,
   Search,
   Send,
   Settings,
+  Sparkles,
   Trash2,
   Upload,
   X,
@@ -39,22 +43,33 @@ import type {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { NavigationRail, type WorkspaceNavItem } from "@/components/workspace/navigation-rail";
+import { ResizableWorkspace } from "@/components/workspace/resizable-workspace";
+import { WorkspaceFileTree, sourceTree, wikiTree } from "@/components/workspace/file-tree";
+import { WebGraph } from "@/components/workspace/web-graph";
+import { openFileNavigation, returnFromFile, shouldApplyFileResult } from "@/components/workspace/workspace-navigation";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 const api = createApiClient();
 
-type View =
-  "files" | "search" | "graph" | "reviews" | "chat" | "jobs" | "settings";
+type View = "chat" | "wiki" | "sources" | "search" | "graph" | "lint" | "reviews" | "settings";
+type RailTarget = View | "research" | "skills" | "jobs" | "projects";
 type AuthState = "loading" | "anonymous" | "authenticated";
 
-const VIEWS: Array<{ id: View; label: string; icon: typeof FileText }> = [
-  { id: "files", label: "文件", icon: FileText },
-  { id: "search", label: "搜索", icon: Search },
-  { id: "graph", label: "图谱", icon: GitFork },
-  { id: "reviews", label: "审阅", icon: FileText },
+const PRIMARY_NAV: WorkspaceNavItem<RailTarget>[] = [
   { id: "chat", label: "对话", icon: MessageSquare },
-  { id: "jobs", label: "任务", icon: LoaderCircle },
-  { id: "settings", label: "设置", icon: Settings },
+  { id: "wiki", label: "Wiki", icon: FileText },
+  { id: "sources", label: "来源", icon: FolderOpen },
+  { id: "search", label: "搜索", icon: Search },
+  { id: "graph", label: "图谱", icon: Network },
+  { id: "lint", label: "检查", icon: ClipboardCheck, hint: "Web 端暂为只读说明" },
+  { id: "reviews", label: "审阅", icon: ClipboardList },
+  { id: "research", label: "深度研究", icon: Globe, disabled: true, hint: "深度研究任务仍由桌面端运行" },
 ];
+
+const WEB_LEFT_COLLAPSED_KEY = "llm-wiki:web-left-panel-collapsed";
 
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
@@ -65,10 +80,6 @@ function errorMessage(error: unknown): string {
     return error.code ? `${error.message} (${error.code})` : error.message;
   }
   return error instanceof Error ? error.message : String(error);
-}
-
-function isDirectory(node: FileTreeNode): boolean {
-  return node.isDir || node.kind === "directory";
 }
 
 function assetKind(
@@ -204,7 +215,9 @@ export function WebApp({ client = api }: { client?: ApiClient }) {
   const [authState, setAuthState] = useState<AuthState>("loading");
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
-  const [activeView, setActiveView] = useState<View>("files");
+  const [activeView, setActiveView] = useState<View>("chat");
+  const [projectDialogOpen, setProjectDialogOpen] = useState(false);
+  const [activityOpen, setActivityOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -278,128 +291,110 @@ export function WebApp({ client = api }: { client?: ApiClient }) {
     return <LoginScreen error={error} onLogin={handleLogin} />;
   }
 
+  const selectRail = (target: RailTarget) => {
+    if (target === "research" || target === "skills") return;
+    if (target === "jobs") {
+      if (activeView === "chat" || activeView === "settings") {
+        setActiveView("wiki");
+        setActivityOpen(true);
+      } else {
+        setActivityOpen((open) => !open);
+      }
+      return;
+    }
+    if (target === "projects") {
+      setProjectDialogOpen(true);
+      return;
+    }
+    if (target === "chat" || target === "settings") setActivityOpen(false);
+    setActiveView(target);
+  };
+
   return (
     <div className="flex h-full min-w-0 flex-col bg-background text-foreground">
-      <header className="flex h-12 shrink-0 items-center gap-3 border-b px-3">
-        <div className="flex min-w-0 flex-1 items-center gap-2">
-          <Bot className="size-5 shrink-0" />
-          <span className="font-semibold">LLM Wiki</span>
-          {selectedProject && (
-            <span className="truncate text-sm text-muted-foreground">
-              / {selectedProject.name}
-            </span>
-          )}
-        </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() =>
-            void loadProjects().catch((error: unknown) =>
-              setError(errorMessage(error)),
-            )
-          }
-          title="刷新项目"
-        >
-          <RefreshCw />
-          刷新
-        </Button>
-        <Button variant="ghost" size="sm" onClick={() => void handleLogout()}>
-          <LogOut />
-          退出登录
-        </Button>
-      </header>
-      {error && (
-        <StatusBar
-          tone="error"
-          message={error}
-          onClose={() => setError(null)}
-        />
-      )}
-      {notice && (
-        <StatusBar
-          tone="notice"
-          message={notice}
-          onClose={() => setNotice(null)}
-        />
-      )}
+      {error && <StatusBar tone="error" message={error} onClose={() => setError(null)} />}
+      {notice && <StatusBar tone="notice" message={notice} onClose={() => setNotice(null)} />}
       <div className="flex min-h-0 flex-1">
-        <ProjectSidebar
-          projects={projects}
-          selectedProject={selectedProject}
-          onSelect={setSelectedProject}
-          onCreate={async (input) => {
-            const created = await client.projects.create(input);
-            setProjects((items) => [
-              created,
-              ...items.filter((item) => item.id !== created.id),
-            ]);
-            setSelectedProject(created);
-            setNotice("项目已创建");
-          }}
-          onRegister={async (path) => {
-            const registered = await client.projects.register({
-              relativePath: path,
-            });
-            setProjects((items) => [
-              registered,
-              ...items.filter((item) => item.id !== registered.id),
-            ]);
-            setSelectedProject(registered);
-            setNotice("项目已注册");
-          }}
-          onRename={async (project, name) => {
-            const updated = await client.projects.update(project.id, { name });
-            setProjects((items) =>
-              items.map((item) => (item.id === updated.id ? updated : item)),
-            );
-            setSelectedProject((current) =>
-              current?.id === updated.id ? updated : current,
-            );
-            setNotice("项目已重命名");
-          }}
-          onUnregister={async (project) => {
-            await client.projects.remove(project.id);
-            const next = projects.filter((item) => item.id !== project.id);
-            setProjects(next);
-            setSelectedProject((current) =>
-              current?.id === project.id ? (next[0] ?? null) : current,
-            );
-            setNotice("项目已解除注册");
-          }}
-          onError={(message) => setError(message)}
+        <NavigationRail
+          active={activityOpen ? "jobs" : activeView}
+          primary={PRIMARY_NAV}
+          secondary={[
+            { id: "skills", label: "Agent Skills", icon: Sparkles, disabled: true, hint: "Skills 管理仍由桌面端提供" },
+            { id: "jobs", label: "任务与活动", icon: Activity },
+            { id: "settings", label: "设置", icon: Settings },
+            { id: "projects", label: "切换项目", icon: ArrowLeftRight },
+          ]}
+          onSelect={selectRail}
+          brand={<Bot className="size-5" />}
         />
-        <nav className="flex w-12 shrink-0 flex-col items-center gap-1 border-r py-2">
-          {VIEWS.map(({ id, label, icon: Icon }) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => setActiveView(id)}
-              title={label}
-              aria-label={label}
-              className={cn(
-                "flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
-                activeView === id && "bg-muted text-foreground",
-              )}
-            >
-              <Icon className="size-4" />
-            </button>
-          ))}
-        </nav>
-        <main className="min-w-0 flex-1 overflow-hidden">
+        <div className="flex min-w-0 flex-1 flex-col">
+          <header className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
+            <span className="truncate text-sm font-medium">{selectedProject?.name ?? "LLM Wiki"}</span>
+            <span className="text-xs text-muted-foreground">Web 工作台</span>
+            <Button className="ml-auto" variant="ghost" size="icon-xs" onClick={() => void loadProjects().catch((value: unknown) => setError(errorMessage(value)))} title="刷新项目">
+              <RefreshCw />
+            </Button>
+            <Button variant="ghost" size="icon-xs" onClick={() => void handleLogout()} title="退出登录">
+              <LogOut />
+            </Button>
+          </header>
           {!selectedProject ? (
             <EmptyProjectState />
           ) : (
-            <ProjectView
+            <ProjectWorkspace
               key={selectedProject.id}
               client={client}
               project={selectedProject}
               activeView={activeView}
-              onError={(message) => setError(message)}
+              onActiveViewChange={setActiveView}
+              activityOpen={activityOpen}
+              onActivityOpenChange={setActivityOpen}
+              onError={setError}
               onNotice={setNotice}
             />
           )}
-        </main>
+        </div>
       </div>
+      <Dialog open={projectDialogOpen} onOpenChange={setProjectDialogOpen}>
+        <DialogContent className="max-h-[85vh] max-w-2xl overflow-hidden p-0">
+          <DialogHeader className="border-b px-4 py-3">
+            <DialogTitle>切换与管理项目</DialogTitle>
+          </DialogHeader>
+          <ProjectSidebar
+            projects={projects}
+            selectedProject={selectedProject}
+            onSelect={(project) => { setSelectedProject(project); setProjectDialogOpen(false); }}
+            onCreate={async (input) => {
+              const created = await client.projects.create(input);
+              setProjects((items) => [created, ...items.filter((item) => item.id !== created.id)]);
+              setSelectedProject(created);
+              setProjectDialogOpen(false);
+              setNotice("项目已创建");
+            }}
+            onRegister={async (path) => {
+              const registered = await client.projects.register({ relativePath: path });
+              setProjects((items) => [registered, ...items.filter((item) => item.id !== registered.id)]);
+              setSelectedProject(registered);
+              setProjectDialogOpen(false);
+              setNotice("项目已注册");
+            }}
+            onRename={async (project, name) => {
+              const updated = await client.projects.update(project.id, { name });
+              setProjects((items) => items.map((item) => item.id === updated.id ? updated : item));
+              setSelectedProject((current) => current?.id === updated.id ? updated : current);
+              setNotice("项目已重命名");
+            }}
+            onUnregister={async (project) => {
+              await client.projects.remove(project.id);
+              const next = projects.filter((item) => item.id !== project.id);
+              setProjects(next);
+              setSelectedProject((current) => current?.id === project.id ? (next[0] ?? null) : current);
+              setNotice("项目已解除注册");
+            }}
+            onError={setError}
+          />
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -601,7 +596,7 @@ function ProjectSidebar({
   }
 
   return (
-    <aside className="flex w-64 shrink-0 flex-col border-r bg-muted/15">
+    <div className="flex h-[70vh] min-h-0 flex-col bg-muted/15">
       <div className="border-b p-3">
         <div className="mb-2 text-xs font-medium tracking-wide text-muted-foreground">
           项目
@@ -714,7 +709,7 @@ function ProjectSidebar({
           ))
         )}
       </div>
-    </aside>
+    </div>
   );
 }
 
@@ -726,207 +721,150 @@ function EmptyProjectState() {
   );
 }
 
-function ProjectView({
+function ProjectWorkspace({
   client,
   project,
   activeView,
+  onActiveViewChange,
+  activityOpen,
+  onActivityOpenChange,
   onError,
   onNotice,
 }: {
   client: ApiClient;
   project: Project;
   activeView: View;
-  onError: (message: string) => void;
-  onNotice: (message: string) => void;
-}) {
-  switch (activeView) {
-    case "files":
-      return (
-        <FilesView
-          client={client}
-          project={project}
-          onError={onError}
-          onNotice={onNotice}
-        />
-      );
-    case "search":
-      return <SearchView client={client} project={project} onError={onError} />;
-    case "graph":
-      return <GraphView client={client} project={project} onError={onError} />;
-    case "reviews":
-      return (
-        <ReviewsView client={client} project={project} onError={onError} />
-      );
-    case "chat":
-      return <ChatView client={client} project={project} onError={onError} />;
-    case "jobs":
-      return (
-        <JobsView
-          client={client}
-          project={project}
-          onError={onError}
-          onNotice={onNotice}
-        />
-      );
-    case "settings":
-      return (
-        <SettingsView client={client} onError={onError} onNotice={onNotice} />
-      );
-  }
-}
-
-function FilesView({
-  client,
-  project,
-  onError,
-  onNotice,
-}: {
-  client: ApiClient;
-  project: Project;
+  onActiveViewChange: (view: View) => void;
+  activityOpen: boolean;
+  onActivityOpenChange: (open: boolean) => void;
   onError: (message: string) => void;
   onNotice: (message: string) => void;
 }) {
   const [tree, setTree] = useState<FileTreeNode[]>([]);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const selectedPathRef = useRef<string | null>(null);
   const [content, setContent] = useState<FileContent | null>(null);
   const [draft, setDraft] = useState("");
   const [loadingTree, setLoadingTree] = useState(true);
   const [loadingFile, setLoadingFile] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [directoryPath, setDirectoryPath] = useState("");
-  const [markdownPath, setMarkdownPath] = useState("wiki/untitled.md");
-  const [movePath, setMovePath] = useState("");
-  const [uploadPath, setUploadPath] = useState("raw/sources");
-  const [creatingFile, setCreatingFile] = useState(false);
-  const [moving, setMoving] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const fileController = useRef<AbortController | null>(null);
-
-  const refreshTree = useCallback(
-    async (signal?: AbortSignal) => {
-      setLoadingTree(true);
-      try {
-        setTree(await client.files.tree(project.id, { signal }));
-      } catch (error) {
-        if (!isAbortError(error)) onError(errorMessage(error));
-      } finally {
-        if (!signal?.aborted) setLoadingTree(false);
-      }
-    },
-    [client, onError, project.id],
+  const fileRequestRef = useRef<AbortController | null>(null);
+  const fileGenerationRef = useRef(0);
+  const [leftCollapsed, setLeftCollapsed] = useState(
+    () => window.localStorage.getItem(WEB_LEFT_COLLAPSED_KEY) === "true",
   );
+  const [returnView, setReturnView] = useState<View | null>(null);
+
+  const refreshTree = useCallback(async (signal?: AbortSignal) => {
+    setLoadingTree(true);
+    try {
+      setTree(await client.files.tree(project.id, { signal }));
+    } catch (error) {
+      if (!isAbortError(error)) onError(errorMessage(error));
+    } finally {
+      if (!signal?.aborted) setLoadingTree(false);
+    }
+  }, [client, onError, project.id]);
 
   useEffect(() => {
     const controller = new AbortController();
-    void refreshTree(controller.signal);
-    return () => controller.abort();
-  }, [refreshTree]);
-
-  async function open(path: string) {
-    const kind = assetKind(path);
-    setSelectedPath(path);
-    setMovePath(path);
+    fileRequestRef.current?.abort();
+    fileRequestRef.current = null;
+    fileGenerationRef.current += 1;
+    selectedPathRef.current = null;
+    setSelectedPath(null);
     setContent(null);
     setDraft("");
-    if (kind) return;
-    fileController.current?.abort();
+    void refreshTree(controller.signal);
+    return () => {
+      controller.abort();
+      fileRequestRef.current?.abort();
+    };
+  }, [project.id, refreshTree]);
+
+  useEffect(() => {
+    window.localStorage.setItem(WEB_LEFT_COLLAPSED_KEY, String(leftCollapsed));
+  }, [leftCollapsed]);
+
+  useEffect(() => {
+    if (activeView !== "wiki") setReturnView(null);
+  }, [activeView]);
+
+  const openFile = useCallback(async (path: string, origin: View = activeView) => {
+    fileRequestRef.current?.abort();
+    fileRequestRef.current = null;
+    fileGenerationRef.current += 1;
+    const generation = fileGenerationRef.current;
+    selectedPathRef.current = path;
+    setSelectedPath(path);
+    setContent(null);
+    setDraft("");
+    const navigation = openFileNavigation(origin, "wiki" as View);
+    setReturnView((current) => navigation.returnView ?? current);
+    onActiveViewChange(navigation.activeView);
+    if (assetKind(path)) {
+      setLoadingFile(false);
+      return;
+    }
     const controller = new AbortController();
-    fileController.current = controller;
+    fileRequestRef.current = controller;
     setLoadingFile(true);
     try {
-      const loaded = await client.files.content(project.id, path, {
-        signal: controller.signal,
-      });
-      if (!controller.signal.aborted) {
+      const loaded = await client.files.content(project.id, path, { signal: controller.signal });
+      if (!controller.signal.aborted && shouldApplyFileResult(fileGenerationRef.current, generation, selectedPathRef.current, path)) {
         setContent(loaded);
         setDraft(loaded.content);
       }
     } catch (error) {
       if (!isAbortError(error)) onError(errorMessage(error));
     } finally {
-      if (!controller.signal.aborted) setLoadingFile(false);
+      if (fileRequestRef.current === controller) {
+        fileRequestRef.current = null;
+        setLoadingFile(false);
+      }
     }
-  }
+  }, [activeView, client, onActiveViewChange, onError, project.id]);
 
-  async function save() {
-    if (!content || !selectedPath) return;
+  const saveFile = async () => {
+    if (!content) return;
+    const generation = fileGenerationRef.current;
+    const path = content.path;
+    const submittedDraft = draft;
     setSaving(true);
     try {
-      const saved = await client.files.save(project.id, selectedPath, {
-        content: draft,
-        revision: content.revision,
-      });
-      const next = { ...saved, content: saved.content ?? draft };
-      setContent(next);
-      setDraft(next.content);
-      onNotice("文件已保存");
+      const saved = await client.files.save(project.id, path, { content: submittedDraft, revision: content.revision });
+      if (shouldApplyFileResult(fileGenerationRef.current, generation, selectedPathRef.current, path)) {
+        setContent(saved);
+        setDraft(saved.content);
+      }
       await refreshTree();
+      onNotice("文件已保存");
     } catch (error) {
-      if (error instanceof ApiError && error.status === 409)
-        onError("文件已在服务器端变更，请重新加载后再保存。");
-      else onError(errorMessage(error));
+      onError(errorMessage(error));
     } finally {
       setSaving(false);
     }
-  }
+  };
 
-  async function createDirectory() {
-    if (!directoryPath.trim()) return;
+  const moveFile = async (targetPath: string) => {
+    if (!selectedPath || !targetPath.trim()) return;
     try {
-      await client.files.createDirectory(project.id, {
-        path: directoryPath.trim(),
-      });
-      setDirectoryPath("");
+      const moved = await client.files.move(project.id, { sourcePath: selectedPath, targetPath: targetPath.trim() });
+      const nextPath = moved.path ?? targetPath.trim();
       await refreshTree();
-      onNotice("目录已创建");
-    } catch (error) {
-      onError(errorMessage(error));
-    }
-  }
-
-  async function createMarkdown() {
-    if (!markdownPath.trim()) return;
-    setCreatingFile(true);
-    try {
-      const created = await client.files.createText(
-        project.id,
-        markdownPath.trim(),
-      );
-      await refreshTree();
-      await open(created.path || markdownPath.trim());
-      onNotice("Markdown 文件已创建");
-    } catch (error) {
-      onError(errorMessage(error));
-    } finally {
-      setCreatingFile(false);
-    }
-  }
-
-  async function move() {
-    if (!selectedPath || !movePath.trim() || movePath.trim() === selectedPath)
-      return;
-    setMoving(true);
-    try {
-      await client.files.move(project.id, {
-        sourcePath: selectedPath,
-        targetPath: movePath.trim(),
-      });
-      await refreshTree();
-      await open(movePath.trim());
+      await openFile(nextPath, "wiki");
       onNotice("文件已移动");
     } catch (error) {
       onError(errorMessage(error));
-    } finally {
-      setMoving(false);
     }
-  }
+  };
 
-  async function remove() {
-    if (!selectedPath || !window.confirm(`确认删除“${selectedPath}”？`)) return;
+  const removeFile = async () => {
+    if (!selectedPath || !window.confirm(`确认删除 ${selectedPath}？`)) return;
     try {
       await client.files.remove(project.id, selectedPath, content?.revision);
+      selectedPathRef.current = null;
       setSelectedPath(null);
-      setMovePath("");
       setContent(null);
       setDraft("");
       await refreshTree();
@@ -934,271 +872,255 @@ function FilesView({
     } catch (error) {
       onError(errorMessage(error));
     }
+  };
+
+  const central = (() => {
+    switch (activeView) {
+      case "wiki":
+        return <WikiPane client={client} project={project} selectedPath={selectedPath} content={content} draft={draft} loadingFile={loadingFile} saving={saving} returnView={returnView} onDraftChange={setDraft} onSave={() => void saveFile()} onMove={(path) => void moveFile(path)} onRemove={() => void removeFile()} onReturn={() => { onActiveViewChange(returnFromFile(returnView, "wiki")); setReturnView(null); }} />;
+      case "sources":
+        return <SourcesWorkspace client={client} project={project} nodes={sourceTree(tree)} onOpen={(path) => void openFile(path, "sources")} onRefresh={refreshTree} onError={onError} onNotice={onNotice} />;
+      case "search":
+        return <SearchView client={client} project={project} onOpen={(path) => void openFile(path, "search")} onError={onError} />;
+      case "graph":
+        return <GraphView client={client} project={project} onOpen={(path) => void openFile(path, "graph")} onError={onError} />;
+      case "reviews":
+        return <ReviewsView client={client} project={project} onOpen={(path) => void openFile(path, "reviews")} onError={onError} />;
+      case "chat":
+        return <ChatView client={client} project={project} onError={onError} />;
+      case "settings":
+        return <SettingsView client={client} onError={onError} onNotice={onNotice} />;
+      case "lint":
+        return <UnsupportedView title="Web 检查暂不可用" description="桌面端的 Lint 会调用本地运行时。Web 端目前只提供只读说明，不会伪造检查结果或启动任务。" />;
+    }
+  })();
+
+  const standalone = activeView === "chat" || activeView === "settings";
+  if (standalone) {
+    return <div className="min-h-0 min-w-0 flex-1 overflow-hidden">{central}</div>;
   }
 
-  async function upload(files: FileList | null) {
+  return (
+    <ResizableWorkspace
+      left={<WorkspaceTreePanel client={client} project={project} tree={tree} selectedPath={selectedPath} loading={loadingTree} onOpen={(path) => void openFile(path)} onRefresh={refreshTree} onCollapse={() => setLeftCollapsed(true)} onError={onError} onNotice={onNotice} />}
+      right={<JobsView client={client} project={project} onClose={() => onActivityOpenChange(false)} onError={onError} onNotice={onNotice} />}
+      leftCollapsed={leftCollapsed}
+      rightOpen={activityOpen}
+      onLeftCollapsedChange={setLeftCollapsed}
+      onRightOpenChange={onActivityOpenChange}
+    >
+      {central}
+    </ResizableWorkspace>
+  );
+}
+
+function WorkspaceTreePanel({
+  client,
+  project,
+  tree,
+  selectedPath,
+  loading,
+  onOpen,
+  onRefresh,
+  onCollapse,
+  onError,
+  onNotice,
+}: {
+  client: ApiClient;
+  project: Project;
+  tree: FileTreeNode[];
+  selectedPath: string | null;
+  loading: boolean;
+  onOpen: (path: string) => void;
+  onRefresh: () => Promise<void>;
+  onCollapse: () => void;
+  onError: (message: string) => void;
+  onNotice: (message: string) => void;
+}) {
+  const [mode, setMode] = useState<"knowledge" | "files">("knowledge");
+  const [directoryPath, setDirectoryPath] = useState("");
+  const [markdownPath, setMarkdownPath] = useState("");
+  const [creating, setCreating] = useState(false);
+
+  const createDirectory = async () => {
+    if (!directoryPath.trim()) return;
+    setCreating(true);
+    try {
+      await client.files.createDirectory(project.id, { path: directoryPath.trim() });
+      setDirectoryPath("");
+      await onRefresh();
+      onNotice("目录已创建");
+    } catch (error) { onError(errorMessage(error)); } finally { setCreating(false); }
+  };
+
+  const createMarkdown = async () => {
+    const rawPath = markdownPath.trim();
+    if (!rawPath) return;
+    const scopedPath = mode === "knowledge" && !rawPath.startsWith("wiki/")
+      ? `wiki/${rawPath}`
+      : rawPath;
+    const path = scopedPath.endsWith(".md") ? scopedPath : `${scopedPath}.md`;
+    setCreating(true);
+    try {
+      await client.files.createText(project.id, path, "# 新页面\n");
+      setMarkdownPath("");
+      await onRefresh();
+      onOpen(path);
+      onNotice("Wiki 页面已创建");
+    } catch (error) { onError(errorMessage(error)); } finally { setCreating(false); }
+  };
+
+  const visibleTree = mode === "knowledge" ? wikiTree(tree) : tree;
+
+  return (
+    <div className="flex h-full flex-col bg-muted/10">
+      <div className="flex h-10 shrink-0 border-b">
+        <button
+          type="button"
+          className={cn(
+            "flex-1 border-b-2 px-2 text-xs font-medium",
+            mode === "knowledge" ? "border-primary text-foreground" : "border-transparent text-muted-foreground",
+          )}
+          onClick={() => setMode("knowledge")}
+        >
+          知识
+        </button>
+        <button
+          type="button"
+          className={cn(
+            "flex-1 border-b-2 px-2 text-xs font-medium",
+            mode === "files" ? "border-primary text-foreground" : "border-transparent text-muted-foreground",
+          )}
+          onClick={() => setMode("files")}
+        >
+          文件
+        </button>
+        <Button variant="ghost" size="icon-xs" onClick={() => void onRefresh()} title="刷新文件树"><RefreshCw /></Button>
+        <Button variant="ghost" size="icon-xs" onClick={onCollapse} title="折叠文件面板"><PanelLeftClose /></Button>
+      </div>
+      <div className="space-y-2 border-b p-2">
+        {mode === "files" && (
+          <div className="flex gap-1">
+            <Input value={directoryPath} onChange={(event) => setDirectoryPath(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void createDirectory(); }} placeholder="新目录路径" aria-label="新目录路径" />
+            <Button variant="outline" size="icon" disabled={creating || !directoryPath.trim()} onClick={() => void createDirectory()} title="创建目录"><FolderPlus /></Button>
+          </div>
+        )}
+        <div className="flex gap-1">
+          <Input value={markdownPath} onChange={(event) => setMarkdownPath(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void createMarkdown(); }} placeholder={mode === "knowledge" ? "新 Wiki 页面（自动写入 wiki/）" : "新 Markdown 路径"} aria-label="新 Wiki 页面" />
+          <Button variant="outline" size="icon" disabled={creating || !markdownPath.trim()} onClick={() => void createMarkdown()} title="创建 Wiki 页面"><FileText /></Button>
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto p-1.5">
+        {loading ? <LoadingScreen label="正在加载文件树..." /> : visibleTree.length ? <WorkspaceFileTree nodes={visibleTree} selectedPath={selectedPath} onOpen={onOpen} /> : <p className="p-3 text-sm text-muted-foreground">{mode === "knowledge" ? "Wiki 中还没有页面。" : "项目中还没有文件。"}</p>}
+      </div>
+    </div>
+  );
+}
+
+function WikiPane({
+  client,
+  project,
+  selectedPath,
+  content,
+  draft,
+  loadingFile,
+  saving,
+  returnView,
+  onDraftChange,
+  onSave,
+  onMove,
+  onRemove,
+  onReturn,
+}: {
+  client: ApiClient;
+  project: Project;
+  selectedPath: string | null;
+  content: FileContent | null;
+  draft: string;
+  loadingFile: boolean;
+  saving: boolean;
+  returnView: View | null;
+  onDraftChange: (value: string) => void;
+  onSave: () => void;
+  onMove: (path: string) => void;
+  onRemove: () => void;
+  onReturn: () => void;
+}) {
+  const [movePath, setMovePath] = useState("");
+  const [mode, setMode] = useState<"edit" | "preview" | "split">("split");
+  const kind = selectedPath ? assetKind(selectedPath) : null;
+  useEffect(() => setMovePath(selectedPath ?? ""), [selectedPath]);
+  if (!selectedPath) return <EmptyPanel icon={FileText} label="从左侧文件树选择 Wiki 页面。" />;
+  if (kind) return <AssetPreview client={client} projectId={project.id} path={selectedPath} kind={kind} returnView={returnView} onReturn={onReturn} />;
+  if (loadingFile) return <LoadingScreen label="正在加载文件..." />;
+  if (!content) return <EmptyPanel icon={FileText} label="此文件无法按文本显示。" />;
+  return (
+    <div className="flex h-full min-w-0 flex-col">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2">
+        {returnView && <Button variant="ghost" size="sm" onClick={onReturn}><ArrowLeft /> 返回</Button>}
+        <span className="min-w-32 flex-1 truncate text-sm font-medium">{content.path}</span>
+        <div className="flex rounded-md border p-0.5">
+          {(["edit", "split", "preview"] as const).map((item) => <button key={item} type="button" onClick={() => setMode(item)} className={cn("rounded px-2 py-1 text-xs", mode === item && "bg-muted font-medium")}>{item === "edit" ? "编辑" : item === "split" ? "分栏" : "预览"}</button>)}
+        </div>
+        <Input className="h-8 max-w-64" value={movePath} onChange={(event) => setMovePath(event.target.value)} aria-label="移动目标路径" />
+        <Button variant="outline" size="sm" disabled={!movePath.trim() || movePath === selectedPath} onClick={() => onMove(movePath)}>移动</Button>
+        <Button variant="destructive" size="sm" onClick={onRemove}><Trash2 /> 删除</Button>
+        <Button size="sm" onClick={onSave} disabled={saving || draft === content.content}>{saving ? <LoaderCircle className="animate-spin" /> : <Save />} 保存</Button>
+      </div>
+      <div className="grid min-h-0 flex-1" style={{ gridTemplateColumns: mode === "split" ? "minmax(0,1fr) minmax(0,1fr)" : "minmax(0,1fr)" }}>
+        {mode !== "preview" && <textarea className="min-h-0 resize-none bg-background p-5 font-mono text-sm leading-6 outline-none" value={draft} onChange={(event) => onDraftChange(event.target.value)} spellCheck={false} aria-label="Wiki 编辑器" />}
+        {mode !== "edit" && <article className={cn("prose prose-sm max-w-none overflow-auto p-6 dark:prose-invert", mode === "split" && "border-l")} aria-label="Wiki 预览"><ReactMarkdown remarkPlugins={[remarkGfm]}>{draft}</ReactMarkdown></article>}
+      </div>
+    </div>
+  );
+}
+
+function SourcesWorkspace({
+  client,
+  project,
+  nodes,
+  onOpen,
+  onRefresh,
+  onError,
+  onNotice,
+}: {
+  client: ApiClient;
+  project: Project;
+  nodes: FileTreeNode[];
+  onOpen: (path: string) => void;
+  onRefresh: () => Promise<void>;
+  onError: (message: string) => void;
+  onNotice: (message: string) => void;
+}) {
+  const [uploading, setUploading] = useState(false);
+  const upload = async (files: FileList | null) => {
     if (!files?.length) return;
     setUploading(true);
     try {
-      await client.files.upload(project.id, Array.from(files), {
-        path: uploadPath.trim() || "raw/sources",
-      });
-      await refreshTree();
-      onNotice(`已上传 ${files.length} 个文件`);
-    } catch (error) {
-      onError(errorMessage(error));
-    } finally {
-      setUploading(false);
-    }
-  }
-
-  const kind = selectedPath ? assetKind(selectedPath) : null;
+      await client.files.upload(project.id, Array.from(files), { path: "raw/sources" });
+      await onRefresh();
+      onNotice(`已上传 ${files.length} 个来源文件到 raw/sources`);
+    } catch (error) { onError(errorMessage(error)); } finally { setUploading(false); }
+  };
   return (
-    <div className="flex h-full min-w-0">
-      <aside className="flex w-72 shrink-0 flex-col border-r">
-        <div className="space-y-2 border-b p-2">
-          <div className="flex items-center justify-between">
-            <span className="text-sm font-medium">文件</span>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              onClick={() => void refreshTree()}
-              title="刷新"
-            >
-              <RefreshCw />
-            </Button>
-          </div>
-          <div className="flex gap-1">
-            <Input
-              value={directoryPath}
-              onChange={(event) => setDirectoryPath(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") void createDirectory();
-              }}
-              placeholder="新目录路径"
-              aria-label="新目录路径"
-            />
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => void createDirectory()}
-              disabled={!directoryPath.trim()}
-              title="创建目录"
-            >
-              <FolderPlus />
-            </Button>
-          </div>
-          <div className="flex gap-1">
-            <Input
-              value={markdownPath}
-              onChange={(event) => setMarkdownPath(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") void createMarkdown();
-              }}
-              placeholder="新 Markdown 路径"
-              aria-label="新 Markdown 路径"
-            />
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => void createMarkdown()}
-              disabled={creatingFile || !markdownPath.trim()}
-              title="新建 Markdown 文件"
-            >
-              <FileText />
-            </Button>
-          </div>
-          <Input
-            value={uploadPath}
-            onChange={(event) => setUploadPath(event.target.value)}
-            placeholder="上传目标目录"
-            aria-label="上传目标目录"
-          />
-          <label className="flex cursor-pointer items-center justify-center gap-1 rounded-md border border-dashed px-2 py-1.5 text-xs text-muted-foreground hover:bg-muted">
-            {uploading ? (
-              <LoaderCircle className="size-3.5 animate-spin" />
-            ) : (
-              <Upload className="size-3.5" />
-            )}{" "}
-            上传文件
-            <input
-              className="sr-only"
-              type="file"
-              multiple
-              disabled={uploading}
-              onChange={(event) => {
-                void upload(event.target.files);
-                event.currentTarget.value = "";
-              }}
-            />
-          </label>
-          <p className="text-[11px] text-muted-foreground">
-            默认上传到 raw/sources，可修改目标目录。
-          </p>
-          {selectedPath && (
-            <div className="flex gap-1 border-t pt-2">
-              <Input
-                value={movePath}
-                onChange={(event) => setMovePath(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") void move();
-                }}
-                aria-label="移动或重命名后的路径"
-              />
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => void move()}
-                disabled={
-                  moving || !movePath.trim() || movePath.trim() === selectedPath
-                }
-                title="移动或重命名"
-              >
-                <GitFork />
-              </Button>
-            </div>
-          )}
-        </div>
-        <div className="min-h-0 flex-1 overflow-auto p-2">
-          {loadingTree ? (
-            <LoadingScreen label="正在加载文件..." />
-          ) : (
-            <FileTree
-              nodes={tree}
-              selectedPath={selectedPath}
-              onOpen={(path) => void open(path)}
-            />
-          )}
-        </div>
-      </aside>
-      <section className="flex min-w-0 flex-1 flex-col">
-        {!selectedPath ? (
-          <EmptyPanel icon={FileText} label="选择文件以查看或编辑。" />
-        ) : kind ? (
-          <AssetPreview
-            client={client}
-            projectId={project.id}
-            path={selectedPath}
-            kind={kind}
-          />
-        ) : loadingFile ? (
-          <LoadingScreen label="正在加载文件..." />
-        ) : content ? (
-          <>
-            <div className="flex shrink-0 items-center gap-2 border-b px-3 py-2">
-              <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                {content.path}
-              </span>
-              <Button
-                variant="destructive"
-                size="sm"
-                onClick={() => void remove()}
-              >
-                <Trash2 /> 删除
-              </Button>
-              <Button
-                size="sm"
-                onClick={() => void save()}
-                disabled={saving || draft === content.content}
-              >
-                {saving ? <LoaderCircle className="animate-spin" /> : <Save />}{" "}
-                保存
-              </Button>
-            </div>
-            <textarea
-              className="min-h-0 flex-1 resize-none bg-background p-4 font-mono text-sm leading-6 outline-none"
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              spellCheck={false}
-              aria-label="文件编辑器"
-            />
-          </>
-        ) : (
-          <EmptyPanel icon={FileText} label="此文件无法按文本显示。" />
-        )}
-      </section>
+    <div className="flex h-full flex-col">
+      <div className="flex h-12 shrink-0 items-center gap-3 border-b px-4">
+        <FolderOpen className="size-4" />
+        <div><div className="text-sm font-medium">来源</div><div className="text-xs text-muted-foreground">raw/sources</div></div>
+        <label className="ml-auto flex cursor-pointer items-center gap-2 rounded-md border border-dashed px-3 py-1.5 text-sm hover:bg-muted">
+          {uploading ? <LoaderCircle className="size-4 animate-spin" /> : <Upload className="size-4" />} 上传到来源目录
+          <input className="sr-only" type="file" multiple onChange={(event) => { void upload(event.target.files); event.currentTarget.value = ""; }} />
+        </label>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto p-4">
+        {nodes.length ? <WorkspaceFileTree nodes={nodes} selectedPath={null} onOpen={onOpen} /> : <EmptyPanel icon={FolderOpen} label="raw/sources 中还没有文件。" />}
+      </div>
     </div>
   );
 }
 
-function FileTree({
-  nodes,
-  selectedPath,
-  onOpen,
-  depth = 0,
-}: {
-  nodes: FileTreeNode[];
-  selectedPath: string | null;
-  onOpen: (path: string) => void;
-  depth?: number;
-}) {
-  return (
-    <>
-      {nodes.map((node) => (
-        <FileTreeItem
-          key={node.path}
-          node={node}
-          selectedPath={selectedPath}
-          onOpen={onOpen}
-          depth={depth}
-        />
-      ))}
-    </>
-  );
-}
-
-function FileTreeItem({
-  node,
-  selectedPath,
-  onOpen,
-  depth,
-}: {
-  node: FileTreeNode;
-  selectedPath: string | null;
-  onOpen: (path: string) => void;
-  depth: number;
-}) {
-  const directory = isDirectory(node);
-  const [expanded, setExpanded] = useState(true);
-  return (
-    <div>
-      <button
-        type="button"
-        onClick={() =>
-          directory ? setExpanded((value) => !value) : onOpen(node.path)
-        }
-        className={cn(
-          "flex w-full items-center gap-1 rounded px-1.5 py-1 text-left text-sm hover:bg-muted",
-          selectedPath === node.path && "bg-muted",
-        )}
-        style={{ paddingLeft: `${depth * 12 + 6}px` }}
-      >
-        {directory ? (
-          expanded ? (
-            <ChevronDown className="size-3.5 shrink-0" />
-          ) : (
-            <ChevronRight className="size-3.5 shrink-0" />
-          )
-        ) : (
-          <span className="w-3.5" />
-        )}
-        {directory ? (
-          <Folder className="size-3.5 shrink-0 text-muted-foreground" />
-        ) : (
-          <File className="size-3.5 shrink-0 text-muted-foreground" />
-        )}
-        <span className="truncate">{node.name}</span>
-      </button>
-      {directory && expanded && node.children && (
-        <FileTree
-          nodes={node.children}
-          selectedPath={selectedPath}
-          onOpen={onOpen}
-          depth={depth + 1}
-        />
-      )}
-    </div>
-  );
+function UnsupportedView({ title, description }: { title: string; description: string }) {
+  return <div className="flex h-full items-center justify-center p-8"><div className="max-w-lg rounded-lg border bg-muted/20 p-6"><ClipboardCheck className="mb-3 size-6 text-muted-foreground" /><h1 className="font-medium">{title}</h1><p className="mt-2 text-sm leading-6 text-muted-foreground">{description}</p><p className="mt-3 text-xs text-muted-foreground">Research 与 Skills 同样依赖桌面本地能力，Web 导航未提供执行入口。</p></div></div>;
 }
 
 function AssetPreview({
@@ -1206,17 +1128,22 @@ function AssetPreview({
   projectId,
   path,
   kind,
+  returnView,
+  onReturn,
 }: {
   client: ApiClient;
   projectId: string;
   path: string;
   kind: "image" | "pdf" | "media" | "download";
+  returnView: View | null;
+  onReturn: () => void;
 }) {
   const source = client.files.assetUrl(projectId, path);
   const download = client.files.assetUrl(projectId, path, true);
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 items-center gap-2 border-b px-3 py-2">
+        {returnView && <Button variant="ghost" size="sm" onClick={onReturn}><ArrowLeft /> 返回</Button>}
         <span className="min-w-0 flex-1 truncate text-sm font-medium">
           {path}
         </span>
@@ -1245,7 +1172,7 @@ function AssetPreview({
         {kind === "media" && <MediaPreview path={path} source={source} />}
         {kind === "download" && (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-center text-sm text-muted-foreground">
-            <File className="size-8 opacity-40" />
+            <FileText className="size-8 opacity-40" />
             <p>此文件类型不会内联预览，请下载后查看。</p>
           </div>
         )}
@@ -1264,10 +1191,12 @@ function MediaPreview({ path, source }: { path: string; source: string }) {
 function SearchView({
   client,
   project,
+  onOpen,
   onError,
 }: {
   client: ApiClient;
   project: Project;
+  onOpen: (path: string) => void;
   onError: (message: string) => void;
 }) {
   const [query, setQuery] = useState("");
@@ -1305,7 +1234,7 @@ function SearchView({
           disabled={loading || !query.trim()}
         >
           {loading ? <LoaderCircle className="animate-spin" /> : <Search />}{" "}
-          Search
+          搜索
         </Button>
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-4">
@@ -1316,7 +1245,7 @@ function SearchView({
           />
         ) : (
           results.map((result) => (
-            <article key={result.path} className="mb-3 rounded-lg border p-3">
+            <button type="button" key={result.path} onClick={() => onOpen(result.path)} className="mb-3 block w-full rounded-lg border p-3 text-left hover:bg-muted/50">
               <div className="flex gap-3">
                 <FileText className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
                 <div className="min-w-0">
@@ -1333,7 +1262,7 @@ function SearchView({
                   )}
                 </div>
               </div>
-            </article>
+            </button>
           ))
         )}
       </div>
@@ -1344,77 +1273,34 @@ function SearchView({
 function GraphView({
   client,
   project,
+  onOpen,
   onError,
 }: {
   client: ApiClient;
   project: Project;
+  onOpen: (path: string) => void;
   onError: (message: string) => void;
 }) {
   const [graph, setGraph] = useState<GraphData | null>(null);
   const [loading, setLoading] = useState(true);
-  const load = useCallback(
-    async (signal?: AbortSignal) => {
-      setLoading(true);
-      try {
-        setGraph(await client.search.graph(project.id, { signal }));
-      } catch (error) {
-        if (!isAbortError(error)) onError(errorMessage(error));
-      } finally {
-        if (!signal?.aborted) setLoading(false);
-      }
-    },
-    [client, onError, project.id],
-  );
-  useEffect(() => {
-    const controller = new AbortController();
-    void load(controller.signal);
-    return () => controller.abort();
-  }, [load]);
-  if (loading) return <LoadingScreen label="正在加载图谱..." />;
-  if (!graph) return <EmptyPanel icon={GitFork} label="图谱不可用。" />;
+  const load = useCallback(async (signal?: AbortSignal) => {
+    setLoading(true);
+    try { setGraph(await client.search.graph(project.id, { signal })); }
+    catch (error) { if (!isAbortError(error)) onError(errorMessage(error)); }
+    finally { if (!signal?.aborted) setLoading(false); }
+  }, [client, onError, project.id]);
+  useEffect(() => { const controller = new AbortController(); void load(controller.signal); return () => controller.abort(); }, [load]);
+  if (loading) return <LoadingScreen label="正在加载知识图谱..." />;
+  if (!graph || graph.nodes.length === 0) return <EmptyPanel icon={Network} label="暂无可显示的图谱数据。" />;
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center gap-3 border-b px-4 py-3">
-        <Network className="size-4" />
-        <span className="font-medium">知识图谱</span>
-        <span className="text-sm text-muted-foreground">
-          {graph.nodes.length} 个节点，{graph.edges.length} 条连接
-        </span>
-        <Button
-          className="ml-auto"
-          variant="ghost"
-          size="sm"
-          onClick={() => void load()}
-        >
-          <RefreshCw /> 刷新
-        </Button>
+    <div className="flex h-full flex-col">
+      <div className="flex h-12 shrink-0 items-center gap-3 border-b px-4">
+        <Network className="size-4" /><span className="font-medium">知识图谱</span>
+        <span className="text-sm text-muted-foreground">{graph.nodes.length} 个节点，{graph.edges.length} 条连接</span>
+        <span className="text-xs text-muted-foreground">滚轮缩放，拖动画布，点击节点打开文件</span>
+        <Button className="ml-auto" variant="ghost" size="sm" onClick={() => void load()}><RefreshCw /> 刷新</Button>
       </div>
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-0 overflow-auto md:grid-cols-2">
-        <section className="border-b p-4 md:border-b-0 md:border-r">
-          <h2 className="mb-3 text-sm font-medium">节点</h2>
-          {graph.nodes.map((node) => (
-            <div key={node.id} className="mb-2 rounded-md border px-3 py-2">
-              <div className="text-sm font-medium">{node.label ?? node.id}</div>
-              <div className="text-xs text-muted-foreground">
-                {node.path ?? node.type ?? "页面"}
-              </div>
-            </div>
-          ))}
-        </section>
-        <section className="p-4">
-          <h2 className="mb-3 text-sm font-medium">连接</h2>
-          {graph.edges.map((edge, index) => (
-            <div
-              key={edge.id ?? `${edge.source}-${edge.target}-${index}`}
-              className="mb-2 rounded-md border px-3 py-2 text-sm"
-            >
-              <span>{edge.source}</span>
-              <span className="mx-2 text-muted-foreground">-&gt;</span>
-              <span>{edge.target}</span>
-            </div>
-          ))}
-        </section>
-      </div>
+      <div className="min-h-0 flex-1"><WebGraph data={graph} onOpen={onOpen} /></div>
     </div>
   );
 }
@@ -1422,10 +1308,12 @@ function GraphView({
 function ReviewsView({
   client,
   project,
+  onOpen,
   onError,
 }: {
   client: ApiClient;
   project: Project;
+  onOpen: (path: string) => void;
   onError: (message: string) => void;
 }) {
   const [reviews, setReviews] = useState<ReviewItem[]>([]);
@@ -1494,6 +1382,11 @@ function ReviewsView({
                   <p className="mt-2 whitespace-pre-wrap text-sm text-muted-foreground">
                     {review.description}
                   </p>
+                )}
+                {review.sourcePath && (
+                  <button type="button" className="mt-2 text-xs text-primary hover:underline" onClick={() => onOpen(review.sourcePath!)}>
+                    打开来源：{review.sourcePath}
+                  </button>
                 )}
                 <div className="mt-3 flex flex-wrap gap-2">
                   {(review.options?.length
@@ -1651,8 +1544,8 @@ function ChatView({
     setStreaming(false);
   }
   return (
-    <div className="flex h-full min-w-0">
-      <aside className="flex w-56 shrink-0 flex-col border-r">
+    <div className="grid h-full min-w-0 grid-rows-[minmax(8rem,32vh)_minmax(0,1fr)] md:grid-cols-[14rem_minmax(0,1fr)] md:grid-rows-1">
+      <aside className="flex min-h-0 flex-col border-b md:border-r md:border-b-0">
         <div className="border-b p-2">
           <Button
             className="w-full"
@@ -1758,11 +1651,13 @@ function ChatBubble({
 function JobsView({
   client,
   project,
+  onClose,
   onError,
   onNotice,
 }: {
   client: ApiClient;
   project: Project;
+  onClose: () => void;
   onError: (message: string) => void;
   onNotice: (message: string) => void;
 }) {
@@ -1838,105 +1733,44 @@ function JobsView({
       setRetryingId(null);
     }
   }
-  if (loading) return <LoadingScreen label="正在加载任务..." />;
   return (
-    <div className="grid h-full min-h-0 grid-cols-1 md:grid-cols-[minmax(0,1fr)_20rem]">
-      <section className="min-h-0 overflow-auto p-4">
-        <div className="mb-4 flex items-center gap-2">
-          <h1 className="font-medium">任务</h1>
-          <Button
-            className="ml-auto"
-            size="sm"
-            onClick={() => void rebuild()}
-            disabled={rebuilding}
-          >
-            {rebuilding ? (
-              <LoaderCircle className="animate-spin" />
-            ) : (
-              <RefreshCw />
-            )}{" "}
-            重建索引
-          </Button>
-          <Button variant="ghost" size="sm" onClick={() => void load()}>
-            <RefreshCw /> 刷新
-          </Button>
-        </div>
-        {jobs.length === 0 ? (
-          <EmptyPanel icon={LoaderCircle} label="该项目暂无任务。" />
-        ) : (
-          jobs.map((job) => (
-            <article key={job.id} className="mb-3 rounded-lg border p-3">
-              <div className="flex items-start gap-3">
-                <LoaderCircle
-                  className={cn(
-                    "mt-0.5 size-4 text-muted-foreground",
-                    job.status === "running" && "animate-spin",
-                  )}
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap gap-x-2">
-                    <span className="font-medium">{job.type}</span>
-                    <span className="text-sm text-muted-foreground">
-                      {jobStatusLabel(job.status)}
-                    </span>
-                  </div>
-                  {job.progress && (
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {job.progress.message ??
-                        `${job.progress.current ?? 0}/${job.progress.total ?? "?"}`}
-                    </p>
-                  )}
-                  {job.error && (
-                    <p className="mt-1 text-xs text-destructive">{job.error}</p>
-                  )}
-                </div>
-                {["queued", "running"].includes(job.status) && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => void cancel(job)}
-                  >
-                    取消
-                  </Button>
-                )}
-                {job.status === "failed" && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => void retry(job)}
-                    disabled={retryingId === job.id}
-                  >
-                    {retryingId === job.id ? (
-                      <LoaderCircle className="animate-spin" />
-                    ) : (
-                      <RefreshCw />
-                    )}{" "}
-                    重试
-                  </Button>
-                )}
+    <div className="flex h-full min-h-0 flex-col bg-background">
+      <div className="flex h-11 shrink-0 items-center gap-2 border-b px-3">
+        <Activity className="size-4" /><span className="font-medium">任务与活动</span>
+        <Button className="ml-auto" variant="ghost" size="icon-xs" onClick={() => void load()} title="刷新"><RefreshCw /></Button>
+        <Button variant="ghost" size="icon-xs" onClick={onClose} title="关闭活动面板"><X /></Button>
+      </div>
+      <div className="flex shrink-0 gap-2 border-b p-3">
+        <Button className="flex-1" size="sm" onClick={() => void rebuild()} disabled={rebuilding}>
+          {rebuilding ? <LoaderCircle className="animate-spin" /> : <RefreshCw />} 重建索引
+        </Button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto p-3">
+        <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">任务</h2>
+        {loading ? <LoadingScreen label="正在加载任务..." /> : jobs.length === 0 ? (
+          <p className="rounded border border-dashed p-3 text-sm text-muted-foreground">该项目暂无任务。</p>
+        ) : jobs.map((job) => (
+          <article key={job.id} className="mb-2 rounded-lg border p-3">
+            <div className="flex items-start gap-2">
+              <LoaderCircle className={cn("mt-0.5 size-4 shrink-0 text-muted-foreground", job.status === "running" && "animate-spin")} />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-medium">{job.type}</div>
+                <div className="text-xs text-muted-foreground">{jobStatusLabel(job.status)}{job.progress ? ` · ${job.progress.message ?? `${job.progress.current ?? 0}/${job.progress.total ?? "?"}`}` : ""}</div>
+                {job.error && <p className="mt-1 break-words text-xs text-destructive">{job.error}</p>}
               </div>
-            </article>
-          ))
-        )}
-      </section>
-      <aside className="min-h-0 overflow-auto border-t p-4 md:border-t-0 md:border-l">
-        <h2 className="mb-3 text-sm font-medium">实时事件</h2>
-        {events.length === 0 ? (
-          <p className="text-sm text-muted-foreground">正在等待事件...</p>
-        ) : (
-          events.map((event, index) => (
-            <div
-              key={`${event.id ?? "event"}-${index}`}
-              className="mb-2 rounded border p-2 text-xs"
-            >
-              <span className="font-medium">{event.event}</span>
-              <p className="mt-1 break-words text-muted-foreground">
-                {eventText(event)}
-              </p>
+              {["queued", "running"].includes(job.status) && <Button variant="outline" size="xs" onClick={() => void cancel(job)}>取消</Button>}
+              {job.status === "failed" && <Button variant="outline" size="xs" onClick={() => void retry(job)} disabled={retryingId === job.id}>{retryingId === job.id ? <LoaderCircle className="animate-spin" /> : <RefreshCw />} 重试</Button>}
             </div>
-          ))
-        )}
-      </aside>
+          </article>
+        ))}
+        <h2 className="mb-2 mt-5 text-xs font-medium uppercase tracking-wide text-muted-foreground">实时活动</h2>
+        {events.length === 0 ? <p className="text-sm text-muted-foreground">正在等待事件...</p> : events.map((event, index) => (
+          <div key={`${event.id ?? "event"}-${index}`} className="mb-2 rounded border p-2 text-xs">
+            <span className="font-medium">{event.event}</span>
+            <p className="mt-1 break-words text-muted-foreground">{eventText(event)}</p>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

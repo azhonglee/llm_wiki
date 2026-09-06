@@ -421,7 +421,7 @@ npm run tauri build    # 生产构建
 
 Web 服务由无窗口 `llm-wiki-server` 提供静态页面、`/api/v2`、SSE 和受保护资源。**当前服务没有原生 TLS 监听器**，因此唯一受支持的远程部署方式是：服务仅监听 loopback，由 Caddy/Nginx 在同一域名上终止 HTTPS。不能把 Vite、桌面版 `llm-wiki` 或 `llm-wiki-server --allow-insecure-remote` 暴露到 LAN 或公网。
 
-当前 Web UI 支持项目创建、注册、重命名与解除注册，项目文件浏览、Markdown 新建/编辑/移动/删除，资料上传与常见媒体预览，关键词搜索、WikiLink 图谱、Review、OpenAI-compatible Chat、索引任务和脱敏设置。多格式自动 ingest、LanceDB 混合检索、Deep Research 和本地 CLI 仍由桌面版提供，后续按 `plans/web-edition.md` 继续迁移。
+当前 Web UI 已采用与桌面 App 接近的工作台交互：48px 图标导航、知识/文件双 Tab、可折叠和拖拽的左侧树、中央编辑/预览区、右侧任务活动面板以及项目切换弹窗；窄屏会自动改为抽屉布局。它支持项目创建、注册、重命名与解除注册，Markdown 新建/编辑/移动/删除，资料上传与常见媒体预览，搜索结果/图谱节点/Review 跨视图打开文件，关键词搜索、交互式 WikiLink 图谱、Review、OpenAI-compatible Chat、索引任务和脱敏设置。多格式自动 ingest、LanceDB 混合检索、Deep Research 和本地 CLI 仍由桌面版提供，后续按 `plans/web-edition.md` 继续迁移。
 
 随仓库提供的部署文件：
 

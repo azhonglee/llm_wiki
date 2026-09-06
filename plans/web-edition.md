@@ -1,6 +1,6 @@
 # LLM Wiki Web 端完整实现方案
 
-**状态：** Web Preview 已实现；高级导入、向量检索、Research 与 CLI 能力按后续阶段继续收口
+**状态：** Web Preview 与 App 风格工作台已实现；高级导入、向量检索、Research 与 CLI 能力按后续阶段继续收口
 **目标版本：** Web Edition v1
 **设计日期：** 2026-09-05
 **适用场景：** 在 Linux 开发机或服务器上运行 LLM Wiki，通过 `IP:port` 使用浏览器访问；项目文件位于服务器本地磁盘。
