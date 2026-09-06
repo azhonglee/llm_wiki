@@ -2296,21 +2296,6 @@ fn canonicalize_web_root(path: &Path) -> Result<PathBuf, String> {
             .map_err(|error| format!("resolve web root: {error}"))?
             .join(path)
     };
-    let mut current = PathBuf::new();
-    for component in absolute.components() {
-        current.push(component.as_os_str());
-        if current.as_os_str().is_empty() {
-            continue;
-        }
-        let metadata = fs::symlink_metadata(&current)
-            .map_err(|error| format!("inspect web root component: {error}"))?;
-        if metadata.file_type().is_symlink() {
-            return Err(format!(
-                "web root may not contain symlink components: {}",
-                current.display()
-            ));
-        }
-    }
     let canonical =
         fs::canonicalize(&absolute).map_err(|error| format!("canonicalize web root: {error}"))?;
     if !canonical.is_dir() {
@@ -3796,7 +3781,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn startup_rejects_web_root_with_a_symlink_component() {
+    fn startup_canonicalizes_symlinked_web_root() {
         use std::os::unix::fs::symlink;
 
         let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -3806,7 +3791,7 @@ mod tests {
         fs::create_dir_all(&web).unwrap();
         fs::write(web.join("index.html"), "ok").unwrap();
         symlink(&web, base.join("web-link")).unwrap();
-        let result = AppState::new(ServerConfig {
+        let state = AppState::new(ServerConfig {
             host: "127.0.0.1".parse().unwrap(),
             port: 0,
             workspace_root: base.join("workspace"),
@@ -3816,8 +3801,9 @@ mod tests {
             allow_insecure_remote: false,
             secure_cookie: false,
             app_state: None,
-        });
-        assert!(result.is_err());
+        })
+        .unwrap();
+        assert_eq!(state.config.web_root, fs::canonicalize(web).unwrap());
         let _ = fs::remove_dir_all(base);
     }
 
